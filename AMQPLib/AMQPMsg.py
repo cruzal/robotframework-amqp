@@ -3,6 +3,7 @@ Connect to an AMQP server and sent messages to a certain queue
 """
 import pika
 from robot.api import logger
+from pprint import pprint
 
 
 def _receive_callback(chan, method, properties, body):
@@ -23,6 +24,7 @@ class AMQPMsg(object):
         self.queue = ""
         # self.amqp_heartbeat = heartbeat
         self.amqp_timeout = timeout
+        self.unacked_msg = None
 
     def init_amqp_connection(self, amqp_host, amqp_port, amqp_user, amqp_pass, amqp_vhost):
         """
@@ -73,7 +75,7 @@ class AMQPMsg(object):
         :param amqp_queue string:
         """
         self.queue = amqp_queue
-        self.amqp_channel.queue_declare(queue=self.queue)
+        self.amqp_channel.queue_declare(queue=self.queue, durable=True)
 
     def send_amqp_msg(self, msg, exchange=None, routing_key=None):
         """
@@ -93,10 +95,9 @@ class AMQPMsg(object):
                                         routing_key=amqp_routing_key,
                                         body=msg)
 
-    def get_amqp_msg(self, msg_number=1, queue=None):
+    def get_amqp_msg(self, queue=None):
         """
-        Get at least 1 message from the configured queue
-        :param msg_number:  number of messages to consume form the queue
+        Get one message from the configured queue
         :param queue:   queue_name to listen to; if missing listen to the queue configured via set_amqp_queue
         :return:
         """
@@ -105,15 +106,31 @@ class AMQPMsg(object):
         received_messages = []
 
         # variant with basic_get
-        for ev_method, ev_prop, ev_body in self.amqp_channel.consume(self.queue_name,
-                                                                     inactivity_timeout=self.amqp_timeout):
-            if ev_method:
-                logger.debug("AMQP received <-- {}".format(ev_body))
-                self.amqp_channel.basic_ack(ev_method.delivery_tag)
-                received_messages.append(ev_body)
-            if ev_method.delivery_tag == msg_number:
-                break
+        #msgs = self.amqp_channel.consume(queue_name, inactivity_timeout=self.amqp_timeout)
+        self.unacked_msg = self.amqp_channel.basic_get(queue_name)
+        pprint(self.unacked_msg)
+        if self.unacked_msg[0]:
+            logger.debug("AMQP received <-- {}".format(self.unacked_msg[2]))
+            #self.amqp_channel.basic_ack(ev_method.delivery_tag)
+            return self.unacked_msg[2].decode("utf-8")
+        return ''
 
-        requeued_messages = self.amqp_channel.cancel()
-        logger.debug("AMQP requeued after {} received: {}".format(msg_number, requeued_messages))
-        return received_messages
+    def ack_amqp_msg(self):
+        """
+        Acknowledge latest message from the configured queue
+        :return:
+        """
+
+        logger.debug("AMQP ack --> {}".format(self.unacked_msg[2]))
+        self.amqp_channel.basic_ack(self.unacked_msg[0].delivery_tag)
+        self.unacked_msg = None
+
+    def nack_amqp_msg(self):
+        """
+        Unacknowledge latest message from the configured queue
+        :return:
+        """
+
+        logger.debug("AMQP nack --> {}".format(self.unacked_msg[2]))
+        self.amqp_channel.basic_nack(self.unacked_msg[0].delivery_tag)
+        self.unacked_msg = None
